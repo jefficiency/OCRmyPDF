@@ -76,9 +76,33 @@ def add_options(parser: argparse.ArgumentParser) -> None:
     )
     upstage.add_argument(
         '--upstage-model',
-        default='ocr',
+        default='document-parse',
         metavar='MODEL',
         help="Upstage model to use (default: %(default)s)",
+    )
+    upstage.add_argument(
+        '--upstage-chart-recognition',
+        action='store_true',
+        default=True,
+        help="Enable chart-to-table conversion (default: %(default)s)",
+    )
+    upstage.add_argument(
+        '--no-upstage-chart-recognition',
+        action='store_false',
+        dest='upstage_chart_recognition',
+        help="Disable chart-to-table conversion",
+    )
+    upstage.add_argument(
+        '--upstage-merge-tables',
+        action='store_true', 
+        default=True,
+        help="Merge tables that span multiple pages (default: %(default)s)",
+    )
+    upstage.add_argument(
+        '--no-upstage-merge-tables',
+        action='store_false',
+        dest='upstage_merge_tables',
+        help="Disable multipage table merging",
     )
 
 
@@ -125,7 +149,7 @@ def check_options(options: argparse.Namespace) -> None:
         raise BadArgsError(f"Invalid Upstage timeout value: {timeout_str}")
     
     # Validate model name
-    valid_models = {'ocr', 'ocr-250904'}  # Add more as available
+    valid_models = {'ocr', 'ocr-250904', 'document-parse', 'document-parse-250618'}  # Add more as available
     if options.upstage_model not in valid_models:
         log.warning(f"Unknown Upstage model '{options.upstage_model}'. Valid models: {valid_models}")
     
@@ -245,6 +269,8 @@ class UpstageDocumentOcrEngine(OcrEngine):
             timeout=options.upstage_timeout,
             model=options.upstage_model,
             confidence_threshold=options.upstage_confidence_threshold,
+            chart_recognition=getattr(options, 'upstage_chart_recognition', True),
+            merge_tables=getattr(options, 'upstage_merge_tables', True),
         )
 
     @staticmethod

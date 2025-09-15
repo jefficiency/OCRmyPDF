@@ -60,7 +60,7 @@ class UpstageAPIClient:
         
         self.last_request_time = time.time()
     
-    def ocr_image(self, image_path: Path, model: str = 'ocr') -> Dict[str, Any]:
+    def ocr_image(self, image_path: Path, model: str = 'document-parse', chart_recognition: bool = True, merge_tables: bool = True) -> Dict[str, Any]:
         """Send image to Upstage OCR API and return response.
         
         Args:
@@ -79,7 +79,14 @@ class UpstageAPIClient:
         try:
             with open(image_path, 'rb') as f:
                 files = {'document': f}
-                data = {'model': model}
+                data = {
+                    'model': model,  # Use specified model
+                    'chart_recognition': chart_recognition,  # Enable chart-to-table conversion
+                    'merge_multipage_tables': merge_tables,  # Merge tables across pages
+                    'ocr': 'auto',  # Let API decide when to use OCR
+                    'output_formats': "['markdown']",  # Only need markdown for cleaner text
+                    'coordinates': True,  # Essential for hOCR conversion
+                }
                 
                 log.debug(f"Sending {image_path} to Upstage OCR API")
                 response = self.session.post(
@@ -172,28 +179,72 @@ def upstage_to_pdf_coords(vertices: List[Dict[str, int]], page_height: int) -> t
             float(max(x_coords)), float(max(y_coords)))
 
 
+def _get_hocr_class(category: str) -> str:
+    """Map Upstage element category to hOCR CSS class.
+    
+    Based on hOCR 1.2 specification and Tesseract implementation analysis.
+    
+    Args:
+        category: Upstage element category
+        
+    Returns:
+        Appropriate hOCR CSS class name
+        
+    References:
+        - hOCR spec: http://kba.github.io/hocr-spec/1.2/
+        - Tesseract implementation: src/ocrmypdf/hocrtransform/_hocr.py
+        - OCRmyPDF Tesseract plugin: src/ocrmypdf/builtin_plugins/tesseract_ocr.py
+    """
+    # Evidence-based mapping from Tesseract implementation
+    category_mapping = {
+        'header': 'ocr_header',      # ✅ Tesseract uses ocr_header
+        'footer': 'ocr_par',         # ✅ No special footer class, use paragraph
+        'heading1': 'ocr_par',       # ✅ Headings are treated as paragraphs
+        'heading2': 'ocr_par', 
+        'heading3': 'ocr_par',
+        'paragraph': 'ocr_par',      # ✅ Standard paragraph class
+        'caption': 'ocr_caption',    # ✅ Tesseract uses ocr_caption
+        'list': 'ocr_par',           # ✅ Lists treated as paragraphs
+        'equation': 'ocr_par',       # ✅ Equations treated as paragraphs  
+        'table': 'ocr_par',          # ✅ Table content as paragraphs (no ocr_table in standard)
+        'figure': 'ocr_textfloat',   # ✅ Tesseract uses ocr_textfloat for floating elements
+        'chart': 'ocr_textfloat',    # ✅ Charts are floating elements
+    }
+    return category_mapping.get(category, 'ocr_par')
+
+
 def generate_hocr_from_upstage(
     upstage_response: Dict[str, Any], 
     output_hocr: Path, 
     output_text: Path
 ) -> None:
-    """Convert Upstage OCR response to hOCR format.
+    """Convert Upstage Document Parse response to hOCR format.
     
     Args:
-        upstage_response: Response from Upstage OCR API
+        upstage_response: Response from Upstage Document Parse API
         output_hocr: Path to write hOCR file
         output_text: Path to write plain text file
     """
-    if not upstage_response.get('pages'):
+    elements = upstage_response.get('elements', [])
+    if not elements:
         # Empty response - create minimal hOCR
         _generate_empty_hocr(output_hocr, output_text)
         return
     
-    page_data = upstage_response['pages'][0]  # Single page processing
-    page_width = page_data['width']
-    page_height = page_data['height']
-    words = page_data.get('words', [])
-    page_text = page_data.get('text', '')
+    # Get page dimensions from first element or use defaults
+    first_element = elements[0]
+    coordinates = first_element.get('coordinates', [])
+    if coordinates:
+        # Estimate page dimensions from coordinate ranges
+        all_x = [coord['x'] for coord in coordinates for elem in elements for coord in elem.get('coordinates', [])]
+        all_y = [coord['y'] for coord in coordinates for elem in elements for coord in elem.get('coordinates', [])]
+        page_width = 1000  # Default width, will be overridden by actual image dimensions
+        page_height = 1000  # Default height, will be overridden by actual image dimensions
+    else:
+        page_width, page_height = 1000, 1000
+    
+    # Collect text for plain text output
+    text_parts = []
     
     # Generate hOCR XML structure
     hocr_content = f'''<?xml version="1.0" encoding="UTF-8"?>
@@ -203,35 +254,81 @@ def generate_hocr_from_upstage(
 <head>
     <title></title>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-    <meta name='ocr-system' content='Upstage Document OCR' />
+    <meta name='ocr-system' content='Upstage Document Parse' />
     <meta name='ocr-capabilities' content='ocr_page ocr_carea ocr_par ocr_line ocrx_word'/>
 </head>
 <body>
-    <div class='ocr_page' id='page_1' title='image ""; bbox 0 0 {page_width} {page_height}; ppageno 0'>
-        <div class='ocr_carea' id='block_1_1' title="bbox 0 0 {page_width} {page_height}">
-            <p class='ocr_par' dir='ltr' id='par_1' title="bbox 0 0 {page_width} {page_height}">
-                <span class='ocr_line' id='line_1' title="bbox 0 0 {page_width} {page_height}">'''
+    <div class='ocr_page' id='page_1' title='image ""; bbox 0 0 {page_width} {page_height}; ppageno 0'>'''
     
-    # Add words
-    for i, word in enumerate(words):
-        bbox = upstage_to_hocr_bbox(word['boundingBox']['vertices'], page_height)
-        confidence = int(word.get('confidence', 0.0) * 100)  # Convert to 0-100 scale
-        word_text = html.escape(word['text'])
+    # Process each element
+    for i, element in enumerate(elements):
+        if element.get('page', 1) != 1:  # Only process first page for now
+            continue
+            
+        element_id = element.get('id', i)
+        category = element.get('category', 'paragraph')
+        coordinates = element.get('coordinates', [])
+        content = element.get('content', {})
         
-        hocr_content += f'''
-                    <span class='ocrx_word' id='word_{i+1}' title="{bbox}; x_wconf {confidence}">{word_text}</span>'''
+        # Get text from markdown (cleaner than HTML)
+        text = content.get('markdown', '').strip()
+        if not text or not coordinates:
+            continue
+            
+        text_parts.append(text)
+        
+        # Convert relative coordinates to absolute pixels (will be adjusted later)
+        if len(coordinates) >= 4:
+            # Use relative coordinates for now, OCRmyPDF will scale them
+            x1 = coordinates[0]['x']
+            y1 = coordinates[0]['y'] 
+            x2 = coordinates[2]['x']
+            y2 = coordinates[2]['y']
+            
+            # Convert to pixel coordinates (approximate)
+            bbox_x1 = int(x1 * page_width)
+            bbox_y1 = int(y1 * page_height)
+            bbox_x2 = int(x2 * page_width)
+            bbox_y2 = int(y2 * page_height)
+            
+            bbox = f"bbox {bbox_x1} {bbox_y1} {bbox_x2} {bbox_y2}"
+            
+            # Map category to hOCR class
+            hocr_class = _get_hocr_class(category)
+            
+            hocr_content += f'''
+        <div class='ocr_carea' id='block_{element_id}' title="{bbox}">
+            <p class='{hocr_class}' dir='ltr' id='par_{element_id}' title="{bbox}">'''
+            
+            # Split text into lines and create word spans
+            lines = text.split('\n')
+            line_height = (bbox_y2 - bbox_y1) // max(len(lines), 1)
+            
+            for line_idx, line in enumerate(lines):
+                if not line.strip():
+                    continue
+                    
+                line_y1 = bbox_y1 + line_idx * line_height
+                line_y2 = line_y1 + line_height
+                line_bbox = f"bbox {bbox_x1} {line_y1} {bbox_x2} {line_y2}"
+                
+                hocr_content += f'''
+                <span class='ocr_line' id='line_{element_id}_{line_idx}' title="{line_bbox}">
+                    <span class='ocrx_word' id='word_{element_id}_{line_idx}' title="{line_bbox}; x_wconf 95">{html.escape(line.strip())}</span>
+                </span>'''
+            
+            hocr_content += '''
+            </p>
+        </div>'''
     
     hocr_content += '''
-                </span>
-            </p>
-        </div>
     </div>
 </body>
 </html>'''
     
     # Write files
     output_hocr.write_text(hocr_content, encoding='utf-8')
-    output_text.write_text(page_text, encoding='utf-8')
+    output_text.write_text('\n'.join(text_parts), encoding='utf-8')
 
 
 def generate_pdf_from_upstage(
@@ -371,14 +468,16 @@ def generate_hocr(
     api_key: str,
     endpoint: str,
     timeout: float,
-    model: str = 'ocr',
+    model: str = 'document-parse',
     confidence_threshold: float = 0.0,
+    chart_recognition: bool = True,
+    merge_tables: bool = True,
 ) -> None:
     """Generate hOCR file using Upstage OCR API."""
     client = UpstageAPIClient(api_key, endpoint, timeout)
     
     try:
-        response = client.ocr_image(input_file, model)
+        response = client.ocr_image(input_file, model, chart_recognition, merge_tables)
         
         # Filter words by confidence threshold if specified
         if confidence_threshold > 0.0 and response.get('pages'):
