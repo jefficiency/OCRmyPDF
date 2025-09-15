@@ -10,6 +10,9 @@
 .ipynb_checkpoints/
 .mypy_cache/
 .pytest_cache/
+.env
+.DS_Store
+.env
 
 # Dev scratch
 *.ipynb
@@ -24,6 +27,8 @@ tests/resources/private/
 tmp/
 venv*/
 /debug_tests.py
+debug_*.hocr
+debug_*.txt
 *.traineddata
 /private
 /coverage.xml
