@@ -29,6 +29,7 @@ venv*/
 /debug_tests.py
 debug_*.hocr
 debug_*.txt
+upstage_raw_response.json
 *.traineddata
 /private
 /coverage.xml
