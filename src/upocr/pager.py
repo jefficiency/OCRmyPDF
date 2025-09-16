@@ -1,7 +1,8 @@
 """PDF pagination utilities for UpOCR.
 
 This module provides helpers to split PDFs into fixed-size page chunks and
-merge them back in order.
+merge them back in order. Merging defaults to writing an output with a
+"_merged" suffix and does not delete chunk files.
 
 CLI usage example:
     uv run python -m upocr.pager --input img_stock_report.pdf --pages-per-chunk 2
@@ -14,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 import pikepdf
 
@@ -66,24 +67,56 @@ def split_fixed_pages(input_pdf: Path, pages_per_chunk: int = 2) -> SplitResult:
     return SplitResult(input_pdf=input_pdf, output_chunks=output_chunks)
 
 
-def merge_chunks(chunk_paths: Iterable[Path], output_pdf: Path) -> Path:
+def _default_merged_output_path(chunk_paths: Iterable[Path], base_input: Optional[Path] = None) -> Path:
+    # Determine default merged output path ending with _merged.pdf
+    if base_input is not None:
+        return base_input.with_name(f"{base_input.stem}_merged.pdf")
+    # Fallback to the first chunk's stem if base input is not provided
+    chunks_list = list(chunk_paths)
+    if not chunks_list:
+        raise ValueError("At least one chunk is required to determine output path")
+    first = Path(chunks_list[0])
+    return first.with_name(f"{first.stem}_merged.pdf")
+
+
+def merge_chunks(chunk_paths: Iterable[Path], output_pdf: Optional[Path] = None) -> Path:
     """Merge chunk PDFs in the given order into a single output file.
 
     Args:
         chunk_paths: Paths to chunk PDFs in the desired order.
-        output_pdf: Destination file path.
+        output_pdf: Destination file path. If not provided, a default path with
+            a "_merged" suffix will be chosen.
 
     Returns:
         Path to the merged output PDF.
     """
-    output_pdf = Path(output_pdf)
+    chunks_list = list(chunk_paths)
+    if output_pdf is None:
+        output_pdf = _default_merged_output_path(chunks_list)
+    else:
+        output_pdf = Path(output_pdf)
     with pikepdf.Pdf.new() as merged:
-        for chunk in chunk_paths:
+        for chunk in chunks_list:
             with pikepdf.open(str(chunk)) as src:
                 for page in src.pages:
                     merged.pages.append(page)
         merged.save(str(output_pdf))
     return output_pdf
+
+
+def merge_from_split_result(result: SplitResult, output_pdf: Optional[Path] = None) -> Path:
+    """Merge using a SplitResult, defaulting to <input_stem>_merged.pdf.
+
+    Args:
+        result: SplitResult returned by split_fixed_pages.
+        output_pdf: Optional explicit output path.
+
+    Returns:
+        Path to merged output.
+    """
+    if output_pdf is None:
+        output_pdf = result.input_pdf.with_name(f"{result.input_pdf.stem}_merged.pdf")
+    return merge_chunks(result.output_chunks, output_pdf)
 
 
 def _main() -> None:
@@ -109,7 +142,12 @@ def _main() -> None:
         type=Path,
         help="Chunk PDF paths in merge order",
     )
-    merge_p.add_argument("--output", required=True, type=Path, help="Output merged PDF path")
+    merge_p.add_argument(
+        "--output",
+        required=False,
+        type=Path,
+        help="Output merged PDF path (defaults to *_merged.pdf)",
+    )
 
     args = parser.parse_args()
 
