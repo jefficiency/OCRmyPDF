@@ -15,9 +15,15 @@ from typing import Iterable, Iterator, List
 
 
 def _matches_any(path: Path, patterns: Iterable[str]) -> bool:
-    s = str(path)
+    """Return True if any pattern matches the full path or the basename.
+
+    This allows convenient filters like "defi_for_dummies.pdf" (basename) or
+    "**/reports/*.pdf" (full path glob).
+    """
+    s_full = str(path)
+    s_name = path.name
     for pat in patterns:
-        if fnmatch(s, pat):
+        if fnmatch(s_full, pat) or fnmatch(s_name, pat):
             return True
     return False
 
@@ -45,7 +51,14 @@ def iter_targets(roots: Iterable[Path], include: Iterable[str] | None = None, ex
         root = Path(root)
         if not root.exists():
             continue
-        # Use rglob for recursion; filter with fnmatch patterns
+        if root.is_file():
+            path = root
+            if _matches_any(path, inc) and not (exc and _matches_any(path, exc)):
+                out = _compute_output_path(path)
+                if force or not (out.exists() and out.stat().st_mtime >= path.stat().st_mtime):
+                    yield path
+            continue
+        # Use rglob for recursion; filter with glob patterns
         for path in root.rglob("*"):
             if not path.is_file():
                 continue
