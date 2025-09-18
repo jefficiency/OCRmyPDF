@@ -2,7 +2,8 @@
 
 This module provides helpers to split PDFs into fixed-size page chunks and
 merge them back in order. Merging defaults to writing an output with a
-"_merged" suffix and does not delete chunk files.
+"_merged" suffix and does not delete chunk files. It also supports splitting
+with constraints (max pages and max file size per chunk).
 
 CLI usage example:
     uv run python -m upocr.pager --input img_stock_report.pdf --pages-per-chunk 2
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 import pikepdf
 
@@ -26,11 +27,19 @@ class SplitResult:
     output_chunks: List[Path]
 
 
-def _format_chunk_name(stem: str, start_page_index: int, end_page_index: int) -> str:
-    # human-readable 1-based page numbering concatenated, e.g., 1 and 2 -> split_12.pdf
-    if start_page_index == end_page_index:
-        return f"split_{start_page_index}.pdf"
-    return f"split_{start_page_index}{end_page_index}.pdf"
+@dataclass(frozen=True)
+class ChunkIndex:
+    level1: int  # 0-based, two digits
+    level2: int  # 0-based for "unsplit" (00); 1.. for splits, two digits
+    level3: int  # 0-based for "unsplit" (00); 1.. for deeper splits, two digits
+
+
+def _format_chunk_suffix(idx: ChunkIndex) -> str:
+    return f"_chunk{idx.level1:02d}{idx.level2:02d}{idx.level3:02d}"
+
+
+def _format_chunk_name(stem: str, suffix: str) -> str:
+    return f"{stem}{suffix}.pdf"
 
 
 def split_fixed_pages(input_pdf: Path, pages_per_chunk: int = 2) -> SplitResult:
@@ -50,10 +59,12 @@ def split_fixed_pages(input_pdf: Path, pages_per_chunk: int = 2) -> SplitResult:
     output_chunks: List[Path] = []
     with pikepdf.open(str(input_pdf)) as src:
         total_pages = len(src.pages)
-        # Use 1-based page numbers for naming
+        # Use index-based suffixes level1, with level2/3 = 0 for fixed split
+        chunk_idx = 0
         for start_page in range(1, total_pages + 1, pages_per_chunk):
             end_page = min(start_page + pages_per_chunk - 1, total_pages)
-            out_name = _format_chunk_name(input_pdf.stem, start_page, end_page)
+            idx = ChunkIndex(level1=chunk_idx, level2=0, level3=0)
+            out_name = _format_chunk_name(input_pdf.stem, _format_chunk_suffix(idx))
             out_path = input_pdf.with_name(out_name)
 
             with pikepdf.Pdf.new() as out_pdf:
@@ -63,6 +74,92 @@ def split_fixed_pages(input_pdf: Path, pages_per_chunk: int = 2) -> SplitResult:
                 out_pdf.save(str(out_path))
 
             output_chunks.append(out_path)
+            chunk_idx += 1
+
+    return SplitResult(input_pdf=input_pdf, output_chunks=output_chunks)
+
+
+def _filesize_mb(path: Path) -> float:
+    return path.stat().st_size / (1024 * 1024)
+
+
+def _write_range(src: pikepdf.Pdf, input_pdf: Path, start_page: int, end_page: int, idx: ChunkIndex) -> Path:
+    out_name = _format_chunk_name(input_pdf.stem, _format_chunk_suffix(idx))
+    out_path = input_pdf.with_name(out_name)
+    with pikepdf.Pdf.new() as out_pdf:
+        page_numbers = range(start_page - 1, end_page)
+        for page_index in page_numbers:
+            out_pdf.pages.append(src.pages[page_index])
+        out_pdf.save(str(out_path))
+    return out_path
+
+
+def split_by_constraints(
+    input_pdf: Path,
+    max_pages_per_chunk: int = 100,
+    max_megabytes_per_chunk: float = 50.0,
+) -> SplitResult:
+    """Split input into chunks that respect page and size limits.
+
+    Strategy:
+    - Segment document into ranges of ≤ max_pages_per_chunk
+    - For each range, write a chunk and measure size
+      - If size > max_megabytes_per_chunk and pages > 1, split the range in half and retry
+      - Stop when size ≤ limit or the range is a single page
+    """
+    input_pdf = Path(input_pdf)
+    output_chunks: List[Path] = []
+
+    with pikepdf.open(str(input_pdf)) as src:
+        total_pages = len(src.pages)
+
+        def process_range(start_page: int, end_page: int, idx: ChunkIndex) -> None:
+            pages_in_range = end_page - start_page + 1
+            if pages_in_range > max_pages_per_chunk:
+                # split into consecutive windows of max_pages_per_chunk
+                current = start_page
+                l1 = idx.level1
+                l2_counter = 1
+                while current <= end_page:
+                    sub_end = min(current + max_pages_per_chunk - 1, end_page)
+                    process_range(current, sub_end, ChunkIndex(level1=l1, level2=l2_counter, level3=0))
+                    current = sub_end + 1
+                    l2_counter += 1
+                return
+
+            out_path = _write_range(src, input_pdf, start_page, end_page, idx)
+            size_mb = _filesize_mb(out_path)
+            if size_mb <= max_megabytes_per_chunk or pages_in_range == 1:
+                output_chunks.append(out_path)
+                return
+            # too big and more than one page: split in half and retry
+            out_path.unlink(missing_ok=True)
+            mid = start_page + (pages_in_range // 2) - 1
+            # Assign indices according to hierarchy:
+            # - If we are at base (level2==0), assign level2=01,02 and keep level3=00
+            # - Otherwise, we are within a level2 segment; assign level3=01,02 (and grow if split further)
+            if idx.level2 == 0:
+                left_idx = ChunkIndex(level1=idx.level1, level2=1, level3=0)
+                right_idx = ChunkIndex(level1=idx.level1, level2=2, level3=0)
+            else:
+                # Grow level3 digits; keep monotonic growth within this branch
+                base = idx.level3 if idx.level3 else 0
+                left_idx = ChunkIndex(level1=idx.level1, level2=idx.level2, level3=base + 1)
+                right_idx = ChunkIndex(level1=idx.level1, level2=idx.level2, level3=base + 2)
+            process_range(start_page, mid, left_idx)
+            process_range(mid + 1, end_page, right_idx)
+
+        if total_pages == 0:
+            return SplitResult(input_pdf=input_pdf, output_chunks=[])
+
+        # Initial pass: level1 increments per 100-page window, level2/3 start at 0
+        l1 = 0
+        current = 1
+        while current <= total_pages:
+            end = min(current + max_pages_per_chunk - 1, total_pages)
+            process_range(current, end, ChunkIndex(level1=l1, level2=0, level3=0))
+            current = end + 1
+            l1 += 1
 
     return SplitResult(input_pdf=input_pdf, output_chunks=output_chunks)
 
