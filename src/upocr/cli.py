@@ -32,10 +32,10 @@ class Summary:
     duration_s: float = 0.0
 
 
-def _rate_limited_submit(executor, fn, args, *, rps: float) -> futures.Future:
+def _rate_limited_submit(executor, fn, args, *, rps: float, **kwargs) -> futures.Future:
     # naive RPS limiter: sleep between submissions
     time.sleep(1.0 / max(0.01, rps))
-    return executor.submit(fn, *args)
+    return executor.submit(fn, *args, **kwargs)
 
 
 def _process_one(path: Path, force: bool) -> Tuple[Path, str]:
@@ -50,7 +50,8 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--include", nargs="*", default=["**/*.pdf"]) 
     parser.add_argument("--exclude", nargs="*", default=["**/*_upocr.pdf"]) 
     parser.add_argument("--max-workers", type=int, default=1)
-    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
+    parser.add_argument("--force-ocr", action="store_true", help="Force OCR even if text exists")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--rps", type=float, default=1.0, help="Requests per second throttle")
     parser.add_argument(
@@ -91,7 +92,7 @@ def main(argv: List[str] | None = None) -> int:
         for t in targets:
             if prompt_yes_no(f"OCR {t}"):
                 time.sleep(1.0 / max(0.01, args.rps))
-                out_path, status = _process_one(t, args.force)
+                out_path, status = ocr_document(t, force=args.force, force_ocr=args.force_ocr)
                 if status == "ok":
                     summary.ok += 1
                 elif status == "skipped":
@@ -106,7 +107,16 @@ def main(argv: List[str] | None = None) -> int:
         with futures.ThreadPoolExecutor(max_workers=args.max_workers) as ex:
             futs: List[futures.Future] = []
             for t in targets:
-                futs.append(_rate_limited_submit(ex, _process_one, (t, args.force), rps=args.rps))
+                futs.append(
+                    _rate_limited_submit(
+                        ex,
+                        ocr_document,
+                        (t,),
+                        rps=args.rps,
+                        force=args.force,
+                        force_ocr=args.force_ocr,
+                    )
+                )
             for fut in futures.as_completed(futs):
                 out_path, status = fut.result()
                 if status == "ok":
