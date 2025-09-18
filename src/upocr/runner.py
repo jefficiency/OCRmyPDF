@@ -113,7 +113,8 @@ def ocr_document(input_pdf: Path, *, force: bool = False, force_ocr: bool = Fals
             out_path = out
         chunk_outputs.append(out_path)
 
-    final_out = _compute_output_path(input_pdf)
+    # For merged multi-chunk outputs, use _upocr_merged suffix
+    final_out = input_pdf.with_name(f"{input_pdf.stem}_upocr_merged.pdf")
     merge_chunks(chunk_outputs, final_out)
     return final_out, "ok"
 
