@@ -18,7 +18,7 @@ from ocrmypdf.api import Verbosity, configure_logging, ocr
 from ocrmypdf._plugin_manager import get_plugin_manager
 import pikepdf
 
-from .pager import merge_chunks, split_fixed_pages
+from .pager import merge_chunks, split_by_constraints, split_fixed_pages
 
 
 MAX_PAGES_PER_REQUEST = 100
@@ -50,8 +50,12 @@ def _page_count(path: Path) -> int:
         return len(pdf.pages)
 
 
-def ocr_single(input_pdf: Path, *, force: bool = False) -> Tuple[Path, str]:
-    """Run OCR for one PDF (≤100 pages) and return (output_path, status)."""
+def ocr_single(input_pdf: Path, *, force: bool = False, force_ocr: bool = False) -> Tuple[Path, str]:
+    """Run OCR for one PDF (≤100 pages) and return (output_path, status).
+
+    force: overwrite existing output if newer logic would skip
+    force_ocr: pass through to OCRmyPDF (force OCR even if text exists)
+    """
     input_pdf = Path(input_pdf)
     output_pdf = _compute_output_path(input_pdf)
     if not force and output_pdf.exists() and output_pdf.stat().st_mtime >= input_pdf.stat().st_mtime:
@@ -69,21 +73,22 @@ def ocr_single(input_pdf: Path, *, force: bool = False) -> Tuple[Path, str]:
     exit_code = ocr(
         input_file=input_pdf,
         output_file=output_pdf,
+        output_type='pdf',
         pdf_renderer='hocr',
         upstage_api_key=api_key,
         upstage_endpoint='https://api.upstage.ai/v1/document-digitization',
         upstage_model='document-parse',
         upstage_chart_recognition=True,
         upstage_merge_tables=True,
-        force_ocr=False,
-        skip_text=False,
+        force_ocr=force_ocr,
+        skip_text=not force_ocr,
         progress_bar=False,
         plugin_manager=pm,
     )
     return output_pdf, ("ok" if int(exit_code) == 0 else "failed")
 
 
-def ocr_document(input_pdf: Path, *, force: bool = False) -> Tuple[Path, str]:
+def ocr_document(input_pdf: Path, *, force: bool = False, force_ocr: bool = False) -> Tuple[Path, str]:
     """Orchestrate full flow including chunking if needed (>100 pages)."""
     input_pdf = Path(input_pdf)
     try:
@@ -92,15 +97,15 @@ def ocr_document(input_pdf: Path, *, force: bool = False) -> Tuple[Path, str]:
         return _compute_output_path(input_pdf), "failed"
 
     if total_pages <= MAX_PAGES_PER_REQUEST:
-        return ocr_single(input_pdf, force=force)
+        return ocr_single(input_pdf, force=force, force_ocr=force_ocr)
 
-    # Chunking path: split, OCR each chunk sequentially, then merge
-    result = split_fixed_pages(input_pdf, pages_per_chunk=MAX_PAGES_PER_REQUEST)
+    # Chunking path: split with both page and size constraints
+    result = split_by_constraints(input_pdf, max_pages_per_chunk=MAX_PAGES_PER_REQUEST, max_megabytes_per_chunk=50.0)
     chunk_outputs: List[Path] = []
     for chunk in result.output_chunks:
         out_path = chunk.with_name(f"{chunk.stem}_upocr.pdf")
         # Process each chunk
-        out, status = ocr_single(chunk, force=True)
+        out, status = ocr_single(chunk, force=True, force_ocr=force_ocr)
         if status != "ok":
             return _compute_output_path(input_pdf), "failed"
         # The single call produced chunk_upocr.pdf; ensure path
