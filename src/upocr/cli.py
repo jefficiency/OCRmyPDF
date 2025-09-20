@@ -62,7 +62,26 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument(
         "--exclude-toc-files",
         action="store_true",
-        help="Skip PDFs that have bookmarks (table of contents)",
+        default=True,
+        help="Skip PDFs that have bookmarks (table of contents) [default]",
+    )
+    parser.add_argument(
+        "--include-toc-files",
+        action="store_false",
+        dest="exclude_toc_files",
+        help="Process PDFs even if they have bookmarks (disable default skip)",
+    )
+    parser.add_argument(
+        "--exclude-already-ocred",
+        action="store_true",
+        default=True,
+        help="Skip PDFs if <stem>_upocr_merged.pdf exists next to them [default]",
+    )
+    parser.add_argument(
+        "--include-already-ocred",
+        action="store_false",
+        dest="exclude_already_ocred",
+        help="Process PDFs even if merged output exists (disable default skip)",
     )
     args = parser.parse_args(argv)
 
@@ -80,6 +99,7 @@ def main(argv: List[str] | None = None) -> int:
             args.exclude,
             force=args.force,
             exclude_toc_files=args.exclude_toc_files,
+            exclude_already_ocred=args.exclude_already_ocred,
         )
     )
     summary = Summary(total=len(targets))
