@@ -47,8 +47,8 @@ def main(argv: List[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="UpOCR directory runner")
     parser.add_argument("--roots", nargs="+", type=Path, required=True)
-    parser.add_argument("--include", nargs="*", default=["**/*.pdf"]) 
-    parser.add_argument("--exclude", nargs="*", default=["**/*_upocr.pdf"]) 
+    parser.add_argument("--include", nargs="*", default=["**/*.pdf", "**/*.PDF"]) 
+    parser.add_argument("--exclude", nargs="*", default=["**/*_upocr.pdf", "**/*_upocr_merged.pdf", "**/*_upocr_merged.PDF"]) 
     parser.add_argument("--max-workers", type=int, default=1)
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
     parser.add_argument("--force-ocr", action="store_true", help="Force OCR even if text exists")

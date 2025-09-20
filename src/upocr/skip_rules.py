@@ -110,7 +110,39 @@ class UpocrMergedExistsRule:
     def should_skip(self, path: Path) -> bool:
         if not self.enabled:
             return False
-        merged = path.with_name(f"{path.stem}_upocr_merged.pdf")
-        return merged.exists()
+        try:
+            stem = path.stem
+            parent = path.parent
+
+            candidates = [
+                parent / f"{stem}_upocr_merged.pdf",
+                parent / f"{stem}_upocr_merged.PDF",
+            ]
+
+            # If input resides under pdf_<stem>/, also look one level up
+            # for both legacy location and the restructure location:
+            #   <base>/<stem>_upocr_merged.pdf
+            #   <base>/pdf_<stem>_upocr_merged/<stem>_upocr_merged.pdf
+            if parent.name == f"pdf_{stem}":
+                base = parent.parent
+                candidates.extend(
+                    [
+                        base / f"{stem}_upocr_merged.pdf",
+                        base / f"{stem}_upocr_merged.PDF",
+                        base / f"pdf_{stem}_upocr_merged" / f"{stem}_upocr_merged.pdf",
+                        base / f"pdf_{stem}_upocr_merged" / f"{stem}_upocr_merged.PDF",
+                    ]
+                )
+
+            for c in candidates:
+                try:
+                    if c.exists():
+                        return True
+                except Exception:
+                    # Ignore filesystem errors for individual candidates
+                    continue
+            return False
+        except Exception:
+            return False
 
 
