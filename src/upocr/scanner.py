@@ -18,6 +18,7 @@ from .skip_rules import (
     OutputIsNewerRule,
     SkipDecider,
     TocSkipRule,
+    UpocrMergedExistsRule,
 )
 
 
@@ -25,7 +26,7 @@ def _default_includes() -> List[str]:
     return ["**/*.pdf", "**/*.PDF"]
 
 
-def iter_targets(roots: Iterable[Path], include: Iterable[str] | None = None, exclude: Iterable[str] | None = None, *, force: bool = False, exclude_toc_files: bool = False) -> Iterator[Path]:
+def iter_targets(roots: Iterable[Path], include: Iterable[str] | None = None, exclude: Iterable[str] | None = None, *, force: bool = False, exclude_toc_files: bool = False, exclude_already_ocred: bool = False) -> Iterator[Path]:
     inc = list(include or _default_includes())
     exc = list(exclude or [])
     decider = SkipDecider(
@@ -33,6 +34,7 @@ def iter_targets(roots: Iterable[Path], include: Iterable[str] | None = None, ex
             IncludeGlobRule(inc),
             ExcludeGlobRule(exc),
             TocSkipRule(enabled=exclude_toc_files),
+            UpocrMergedExistsRule(enabled=exclude_already_ocred),
             OutputIsNewerRule(force=force),
         ]
     )

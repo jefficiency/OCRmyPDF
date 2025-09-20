@@ -98,3 +98,19 @@ class SkipDecider:
         return False
 
 
+@dataclass
+class UpocrMergedExistsRule:
+    """Skip if a final merged OCR output exists next to the input.
+
+    Looks for <stem>_upocr_merged.pdf in the same directory as the candidate
+    PDF. If present, we consider the file already OCR'd and skip it.
+    """
+    enabled: bool = False
+
+    def should_skip(self, path: Path) -> bool:
+        if not self.enabled:
+            return False
+        merged = path.with_name(f"{path.stem}_upocr_merged.pdf")
+        return merged.exists()
+
+
