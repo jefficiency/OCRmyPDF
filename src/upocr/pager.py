@@ -61,11 +61,16 @@ def split_fixed_pages(input_pdf: Path, pages_per_chunk: int = 2) -> SplitResult:
         total_pages = len(src.pages)
         # Use index-based suffixes level1, with level2/3 = 0 for fixed split
         chunk_idx = 0
+        chunk_dir = input_pdf.parent / "chunks"
+        try:
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            chunk_dir = input_pdf.parent
         for start_page in range(1, total_pages + 1, pages_per_chunk):
             end_page = min(start_page + pages_per_chunk - 1, total_pages)
             idx = ChunkIndex(level1=chunk_idx, level2=0, level3=0)
             out_name = _format_chunk_name(input_pdf.stem, _format_chunk_suffix(idx))
-            out_path = input_pdf.with_name(out_name)
+            out_path = chunk_dir / out_name
 
             with pikepdf.Pdf.new() as out_pdf:
                 page_numbers = range(start_page - 1, end_page)  # 0-based indexes
@@ -85,7 +90,12 @@ def _filesize_mb(path: Path) -> float:
 
 def _write_range(src: pikepdf.Pdf, input_pdf: Path, start_page: int, end_page: int, idx: ChunkIndex) -> Path:
     out_name = _format_chunk_name(input_pdf.stem, _format_chunk_suffix(idx))
-    out_path = input_pdf.with_name(out_name)
+    chunk_dir = input_pdf.parent / "chunks"
+    try:
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        out_path = chunk_dir / out_name
+    except Exception:
+        out_path = input_pdf.with_name(out_name)
     with pikepdf.Pdf.new() as out_pdf:
         page_numbers = range(start_page - 1, end_page)
         for page_index in page_numbers:
