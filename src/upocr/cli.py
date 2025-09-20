@@ -59,6 +59,11 @@ def main(argv: List[str] | None = None) -> int:
         action="store_true",
         help="Ask y/n before processing each file (disables concurrency)",
     )
+    parser.add_argument(
+        "--exclude-toc-files",
+        action="store_true",
+        help="Skip PDFs that have bookmarks (table of contents)",
+    )
     args = parser.parse_args(argv)
 
     # Load .env early
@@ -68,7 +73,15 @@ def main(argv: List[str] | None = None) -> int:
         return 2
 
     start = time.time()
-    targets = list(iter_targets(args.roots, args.include, args.exclude, force=args.force))
+    targets = list(
+        iter_targets(
+            args.roots,
+            args.include,
+            args.exclude,
+            force=args.force,
+            exclude_toc_files=args.exclude_toc_files,
+        )
+    )
     summary = Summary(total=len(targets))
 
     if args.dry_run:
