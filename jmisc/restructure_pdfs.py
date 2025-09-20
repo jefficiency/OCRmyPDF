@@ -4,14 +4,15 @@ Given one or more roots, recursively find *.pdf files and move each file
 into a sibling directory named after the file's stem.
 
 Example:
-    foo/bar/textbook1.pdf  ->  foo/bar/textbook1/textbook1.pdf
+    foo/bar/textbook1.pdf  ->  foo/bar/pdf_textbook1/textbook1.pdf
 
 Usage:
     uv run python jmisc/restructure_pdfs.py --roots data/
     uv run python jmisc/restructure_pdfs.py --roots data/ ~/Downloads --dry-run
 
 Notes:
-    - Skips files already placed in a matching directory (i.e., parent name == stem)
+    - Skips files already placed in a matching directory (i.e., parent name matches
+      either the file's stem or "pdf_" + stem)
     - Skips if destination file already exists (unless --force)
     - Uses shutil.move (works across filesystems)
 """
@@ -36,9 +37,11 @@ def find_pdfs(root: Path) -> list[Path]:
 def plan_move(pdf_path: Path) -> tuple[Path, Path] | None:
     stem = pdf_path.stem
     parent = pdf_path.parent
-    if parent.name == stem:
-        return None  # Already in a matching directory
-    target_dir = parent / stem
+    target_dir_name = f"pdf_{stem}"
+    # If already in either the stem directory or the prefixed stem directory, skip
+    if parent.name == stem or parent.name == target_dir_name:
+        return None
+    target_dir = parent / target_dir_name
     target_path = target_dir / pdf_path.name
     return target_dir, target_path
 
