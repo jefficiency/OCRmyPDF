@@ -23,6 +23,7 @@ import argparse
 import sys
 from pathlib import Path
 import shutil
+import re
 
 
 def find_pdfs(root: Path) -> list[Path]:
@@ -34,7 +35,35 @@ def find_pdfs(root: Path) -> list[Path]:
     return results
 
 
+def _is_generated_or_intermediate(pdf_path: Path) -> bool:
+    """Return True for files we should NOT restructure.
+
+    Skips UpOCR and pagination intermediates/outputs, including:
+    - Any PDF inside a directory named "chunks"
+    - Filenames containing the standard chunk suffix pattern: _chunkNNNNNN[...].pdf
+    - Files ending with _merged.pdf or _upocr.pdf
+    """
+    # Skip anything under a 'chunks' directory at any depth
+    if "chunks" in pdf_path.parts:
+        return True
+
+    stem = pdf_path.stem
+    # Match chunk naming produced by upocr.pager: _chunk + 6 digits, with optional extra suffix
+    if re.search(r"_chunk\d{6}($|_)", stem):
+        return True
+
+    if stem.endswith("_merged"):
+        return True
+
+    if stem.endswith("_upocr"):
+        return True
+
+    return False
+
+
 def plan_move(pdf_path: Path) -> tuple[Path, Path] | None:
+    if _is_generated_or_intermediate(pdf_path):
+        return None
     stem = pdf_path.stem
     parent = pdf_path.parent
     target_dir_name = f"pdf_{stem}"
